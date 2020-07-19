@@ -2,7 +2,10 @@ module FastRepl
 
 using Base.Meta: isexpr
 
-export @repl, @reset
+export @repl, @reset, register_auto
+
+
+include("register.jl")
 
 
 """

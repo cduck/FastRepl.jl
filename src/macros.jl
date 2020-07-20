@@ -21,8 +21,7 @@ Make the decorated function or struct redefinable in a REPL.
     the package under development every time.  `_fast_deinit_` will be called on
     the top module before a re-import if it exists.
 - Function: Decorate the first method with `@reset` and the rest with `@repl`.
-- Struct: Decorate the definition with `@repl`.  **Warning:** Modifying global
-    variables from an inner constructor is broken by this.
+- Struct: Decorate the definition with `@repl`.
 - Block: Apply the `@repl` macro to the top-level of an entire block of code in
     a REPL like Jupyter.
 
@@ -40,7 +39,7 @@ function _macro_repl(expr, mod, flags=Symbol[])
     if is_function_expr(expr)
         _macro_repl_function(expr, mod)
     elseif isexpr(expr, :struct)
-        _macro_repl_struct(expr)
+        _macro_repl_struct(expr, mod)
     elseif expr isa Expr && expr.head in (:block, :toplevel)
         _macro_repl_block(expr, mod, flags)
     elseif is_import_expr(expr)
@@ -103,20 +102,19 @@ function function_with_symbol(expr::Expr, sym)
     end
 end
 
-_repl_function_counters = Dict()
-_repl_struct_sym_map = Dict()
 """
 Helper for `@repl function ...`.
 """
 function _macro_repl_function(expr::Expr, mod::Module; nofail::Bool=false,
                               reset::Bool=false)
+    @assert is_function_expr(expr)
     quote
         # Defer to runtime
         $_do_temporary_function($(Core.Box(expr)), $mod, $nofail, $reset)
     end
 end
 
-_temp_function_symbol(sym, i) = Symbol("䷀$(sym) v$(i)")
+_temp_function_symbol(sym, i) = Symbol("䷀$(sym)_v$(i)")
 
 function _do_temporary_function(expr_box, mod, nofail, reset)
     expr = expr_box.contents
@@ -183,22 +181,69 @@ function make_top_level!(expr::Expr)
     end
 end
 
+function struct_name(expr::Expr)::Symbol
+    @assert isexpr(expr, :struct)
+    expr.args[2] isa Symbol && return expr.args[2]
+    root_expr = _first_root_expr(expr.args[2])
+    root_expr.args[1]
+end
+
+function struct_with_name(expr::Expr, sym::Symbol)
+    @assert isexpr(expr, :struct)
+    if expr.args[2] isa Symbol
+        Expr(expr.head, expr.args[1], sym, expr.args[3:end]...)
+    else
+        root_expr = _first_root_expr(expr.args[2])
+        _with_first_root_expr(
+            expr.args[2],
+            Expr(root_expr.head, sym, root_expr.args[2:end]...))
+    end
+end
+
+function expr_with_vals_replaced(expr, old_val, new_val)
+    expr == old_val && return new_val
+    expr isa Expr || return expr
+    new_args = [expr_with_vals_replaced(a, old_val, new_val)
+                for a in expr.args]
+    Expr(expr.head, new_args...)
+end
+
 """
 Helper for `@repl struct ...`.
 """
-function _macro_repl_struct(expr::Expr)
+function _macro_repl_struct(expr::Expr, mod::Module)
     @assert isexpr(expr, :struct)
-    sym = expr.args[2]
-    i = _repl_function_counters[sym] = get(_repl_function_counters, sym, 0) + 1
-    mod_sym = Symbol("䷀$(sym) v$(i)")
-    tmp_sym = :($mod_sym.$sym)
-    _repl_struct_sym_map[sym] = tmp_sym
-    make_top_level!(quote
-        module $mod_sym
-            $expr
-        end
-        $sym = $mod_sym.$sym
-    end)
+    quote
+        # Defer to runtime
+        $_do_temporary_struct($(Core.Box(expr)), $mod)
+    end
+end
+
+function _do_temporary_struct(expr_box, mod)
+    expr = expr_box.contents
+    sym = struct_name(expr)
+    out_expr = make_top_level!(quote end)
+    counters = actual_getproperty(mod, :䷀function_counters, Dict{Symbol, Int}())
+    i = counters[sym] = get!(counters, sym, 0) + 1
+    push!(out_expr.args, :(䷀function_counters = $counters))
+    tmp_sym = _temp_function_symbol(sym, i)
+    new_expr = expr_with_vals_replaced(expr, sym, tmp_sym)
+
+    fallback = true
+    try
+        Base.eval(mod, :($sym = $no_longer_defined))
+        fallback = false
+    catch e
+        e isa ErrorException || rethrow()
+        println("Warning: $(sym) is not resettable.")
+    end
+    if fallback
+        push!(out_expr.args, expr)
+    else
+        push!(out_expr.args, new_expr)
+        push!(out_expr.args, :($sym = $tmp_sym))
+    end
+    Base.eval(mod, out_expr)  # Returns the defined function
 end
 
 """
@@ -218,7 +263,7 @@ function _macro_repl_block(expr::Expr, mod::Module, flags=Symbol::[])
             sub_expr = expr.args[i]
             if isexpr(sub_expr, :struct)
                 sym = sub_expr.args[2]
-                expr.args[i] = _macro_repl_struct(sub_expr)
+                expr.args[i] = _macro_repl_struct(sub_expr, mod)
                 push!(was_defined, sym)
             elseif is_function_expr(sub_expr)
                 sym = function_symbol(sub_expr)
@@ -253,6 +298,17 @@ function _first_root_expr(expr)
         expr
     else
         _first_root_expr(expr.args[1])
+    end
+end
+
+function _with_first_root_expr(expr, new_root_expr)
+    @assert expr isa Expr
+    if length(expr.args) <= 0 || !(expr.args[1] isa Expr)
+        new_root_expr
+    else
+        Expr(expr.head,
+             _with_first_root_expr(expr.args[1], new_root_expr),
+             expr.args[2:end]...)
     end
 end
 

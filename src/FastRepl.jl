@@ -28,12 +28,6 @@ function show(io, ::FastRepl.NoLongerDefined)
     print(io, "no_longer_defined")
 end
 
-# For debugging
-macro dump(expr)
-    dump(expr)
-end
-Base.eval(Main, :(var"@䷀dump" = $var"@dump"))
-
 function _fast_deinit_()
     unregister_auto(quiet=true)
 end

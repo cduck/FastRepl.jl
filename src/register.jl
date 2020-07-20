@@ -14,7 +14,7 @@ end
 function register_auto(; reset_flag=false, quiet=false)
     _test_ijulia(quiet) || return
     unregister_auto(quiet=quiet)
-    mac = reset_flag ? var"@repl_reset" : var"repl"
+    mac = reset_flag ? var"@repl_reset" : var"@repl"
     push!(Main.IJulia.cell_macros, mac)
     nothing
 end

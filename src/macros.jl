@@ -77,10 +77,16 @@ macro reset(expr)
 end
 
 function is_function_expr(expr)
-    (isexpr(expr, :function)
-     || isexpr(expr, :macro)
-     || (isexpr(expr, :(=)) && isexpr(expr.args[1], :call))
-    )
+    isexpr(expr, :function) && return true
+    isexpr(expr, :macro) && return true
+    if isexpr(expr, :(=))
+        sub_expr = expr.args[1]
+        while isexpr(sub_expr, :where)
+            sub_expr = sub_expr.args[1]
+        end
+        isexpr(sub_expr, :call) && return true
+    end
+    false
 end
 
 function function_symbol(expr::Expr)
@@ -88,8 +94,12 @@ function function_symbol(expr::Expr)
     if expr.args[1] isa Symbol
         expr.args[1]
     else
-        @assert isexpr(expr.args[1], :call)
-        expr.args[1].args[1]
+        sub_expr = expr.args[1]
+        while isexpr(sub_expr, :where)
+            sub_expr = sub_expr.args[1]
+        end
+        @assert isexpr(sub_expr, :call)
+        sub_expr.args[1]
     end
 end
 
@@ -98,10 +108,14 @@ function function_with_symbol(expr::Expr, sym)
     if expr.args[1] isa Symbol
         Expr(expr.head, sym, expr.args[2:end]...)
     else
-        @assert isexpr(expr.args[1], :call)
-        Expr(expr.head,
-             Expr(expr.args[1].head, sym, expr.args[1].args[2:end]...),
-             expr.args[2:end]...)
+        decl = copy(expr.args[1])
+        sub_expr = decl
+        while isexpr(sub_expr, :where)
+            sub_expr = sub_expr.args[1] = copy(sub_expr.args[1])
+        end
+        @assert isexpr(sub_expr, :call)
+        sub_expr.args[1] = sym
+        Expr(expr.head, decl, expr.args[2:end]...)
     end
 end
 

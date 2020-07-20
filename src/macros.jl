@@ -21,7 +21,8 @@ Make the decorated function or struct redefinable in a REPL.
     the package under development every time.  `_fast_deinit_` will be called on
     the top module before a re-import if it exists.
 - Function: Decorate the first method with `@reset` and the rest with `@repl`.
-- Struct: Decorate the definition with `@repl`.
+- Struct: Decorate the definition with `@repl`.  **Warning:** Modifying global
+    variables from an inner constructor is broken by this.
 - Block: Apply the `@repl` macro to the top-level of an entire block of code in
     a REPL like Jupyter.
 
@@ -37,11 +38,11 @@ macro repl(flag::Symbol, expr)
 end
 function _macro_repl(expr, mod, flags=Symbol[])
     if is_function_expr(expr)
-        _macro_repl_function(expr)
+        _macro_repl_function(expr, mod)
     elseif isexpr(expr, :struct)
-        _macro_reset_struct(expr)
+        _macro_repl_struct(expr)
     elseif expr isa Expr && expr.head in (:block, :toplevel)
-        _macro_repl_block(expr, flags)
+        _macro_repl_block(expr, mod, flags)
     elseif is_import_expr(expr)
         _macro_repl_import(expr, mod)
     elseif expr === nothing
@@ -64,7 +65,7 @@ macro reset(expr)
     if expr isa Symbol
         esc(_macro_reset_symbol(expr))
     elseif is_function_expr(expr)
-        esc(_macro_reset_function(expr))
+        esc(_macro_reset_function(expr, __module__))
     elseif expr === nothing
         nothing
     else
@@ -107,66 +108,66 @@ _repl_struct_sym_map = Dict()
 """
 Helper for `@repl function ...`.
 """
-function _macro_repl_function(expr::Expr; nofail::Bool=false)
+function _macro_repl_function(expr::Expr, mod::Module; nofail::Bool=false,
+                              reset::Bool=false)
+    quote
+        # Defer to runtime
+        $_do_temporary_function($(Core.Box(expr)), $mod, $nofail, $reset)
+    end
+end
+
+_temp_function_symbol(sym, i) = Symbol("䷀$(sym) v$(i)")
+
+function _do_temporary_function(expr_box, mod, nofail, reset)
+    expr = expr_box.contents
     sym = function_symbol(expr)
-    if haskey(_repl_struct_sym_map, sym)
-        tmp_sym = _repl_struct_sym_map[sym]
-    else
-        i = get!(_repl_function_counters, sym, 1)
-        tmp_sym = Symbol("$(sym)䷀v$(i)")
+    out_expr = make_top_level!(quote end)
+    counters = actual_getproperty(mod, :䷀function_counters, Dict{Symbol, Int}())
+    i = get!(counters, sym, 0)
+    if reset || i < 1
+        i = counters[sym] += 1
     end
+    push!(out_expr.args, :(䷀function_counters = $counters))
+    tmp_sym = _temp_function_symbol(sym, i)
     new_expr = function_with_symbol(expr, tmp_sym)
-    expr_box = Core.Box(expr)
-    new_expr_box = Core.Box(new_expr)
-    if nofail
-        quote
-            # Make a private scope to not pollute the user's global namespace
-            (() -> begin
-                fallback = true
-                try
-                    global $sym = $no_longer_defined
-                    fallback = false
-                catch e
-                    e isa ErrorException || rethrow()
-                    println("Info: $($sym) is not resettable.")
-                end
-                if fallback
-                    eval($expr_box.contents)
-                else
-                    eval(($make_top_level!)(quote
-                        $$new_expr_box.contents
-                        global $$sym = $$tmp_sym
-                    end))
-                end
-                $sym
-            end)()
-        end
-    else
-        quote
-            $new_expr
-            $sym = $tmp_sym
-        end
+
+    fallback = true
+    try
+        Base.eval(mod, :($sym = $no_longer_defined))
+        fallback = false
+    catch e
+        e isa ErrorException || rethrow()
+        println("$(nofail ? "Info" : "Warning"): $(sym) is not "
+                   * "resettable.")
     end
+    if fallback
+        push!(out_expr.args, expr)
+    else
+        push!(out_expr.args, new_expr)
+        push!(out_expr.args, :($sym = $tmp_sym))
+    end
+    Base.eval(mod, out_expr)  # Returns the defined function
 end
 
 """
 Helper for `@reset function ...`.
 """
-function _macro_reset_function(expr::Expr; nofail::Bool=false)
-    sym = function_symbol(expr)
-    delete!(_repl_struct_sym_map, sym)
-    _repl_function_counters[sym] = get(_repl_function_counters, sym, 0) + 1
-    _macro_repl_function(expr, nofail=nofail)
+function _macro_reset_function(expr::Expr, mod::Module; nofail::Bool=false)
+    _macro_repl_function(expr, mod, nofail=nofail, reset=true)
 end
 
 """
 Helper for `@reset function_name`.
 """
 function _macro_reset_symbol(sym::Symbol)
-    delete!(_repl_struct_sym_map, sym)
-    _repl_function_counters[sym] = get(_repl_function_counters, sym, 0) + 1
+    sym_box = Core.Box(sym)
     quote
-        $sym = nothing
+        ($setindex!)(䷀function_counters,
+                     ($get)(䷀function_counters, $sym_box.contents, 0)
+                     + ($sym !== $no_longer_defined),
+                     $sym_box.contents)
+        $sym = $no_longer_defined
+        nothing
     end
 end
 
@@ -183,13 +184,13 @@ function make_top_level!(expr::Expr)
 end
 
 """
-Helper for `@repl struct ...` and `@reset struct ...`.
+Helper for `@repl struct ...`.
 """
-function _macro_reset_struct(expr::Expr)
+function _macro_repl_struct(expr::Expr)
     @assert isexpr(expr, :struct)
     sym = expr.args[2]
     i = _repl_function_counters[sym] = get(_repl_function_counters, sym, 0) + 1
-    mod_sym = Symbol("$(sym)䷀v$(i)")
+    mod_sym = Symbol("䷀$(sym) v$(i)")
     tmp_sym = :($mod_sym.$sym)
     _repl_struct_sym_map[sym] = tmp_sym
     make_top_level!(quote
@@ -203,7 +204,7 @@ end
 """
 Helper for `@repl begin ...` and `@@repl ...`.
 """
-function _macro_repl_block(expr::Expr, flags=Symbol::[])
+function _macro_repl_block(expr::Expr, mod::Module, flags=Symbol::[])
     reset_flag = :reset in flags
     known_flags = [:reset]
     if !all(f in known_flags for f in flags)
@@ -217,14 +218,16 @@ function _macro_repl_block(expr::Expr, flags=Symbol::[])
             sub_expr = expr.args[i]
             if isexpr(sub_expr, :struct)
                 sym = sub_expr.args[2]
-                expr.args[i] = _macro_reset_struct(sub_expr)
+                expr.args[i] = _macro_repl_struct(sub_expr)
                 push!(was_defined, sym)
             elseif is_function_expr(sub_expr)
                 sym = function_symbol(sub_expr)
                 if reset_flag && !(sym in was_defined)
-                    expr.args[i] = _macro_reset_function(sub_expr, nofail=true)
+                    expr.args[i] = _macro_reset_function(sub_expr, mod,
+                                                         nofail=true)
                 else
-                    expr.args[i] = _macro_repl_function(sub_expr, nofail=true)
+                    expr.args[i] = _macro_repl_function(sub_expr, mod,
+                                                        nofail=true)
                 end
                 push!(was_defined, sym)
             end
@@ -233,7 +236,7 @@ function _macro_repl_block(expr::Expr, flags=Symbol::[])
     else
         # A single statement
         if is_function_expr(expr)
-            _macro_repl_function(expr, nofail=true)
+            _macro_repl_function(expr, mod, nofail=true)
         else
             expr
         end

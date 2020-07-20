@@ -1,8 +1,9 @@
 """
+Macros to make the IJulia REPL more dynamic and improve developer productivity
 
-See the documentation of ``@repl``.
+See the documentation for ``@repl``.
 
-# Development
+# FastRepl Development
 Use it on itself:
 ```julia
 module _FastRepl using FastRepl end

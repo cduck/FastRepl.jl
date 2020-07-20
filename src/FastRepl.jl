@@ -1,5 +1,5 @@
 """
-Macros to make the IJulia REPL more dynamic and improve developer productivity
+Macros to make the Julia REPL more dynamic and improve developer productivity
 
 See the documentation for ``@repl``.
 

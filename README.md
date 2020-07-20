@@ -1,6 +1,13 @@
 # FastRepl.jl
 
-Some macros to work around Julia's inability to delete function methods and redefine structs.
+Some macros to work around [Julia](https://julialang.org/)'s inability to reload packages, remove function methods, and redefine structs.
+
+## Install
+
+Install FastRepl with Julia's package manager:
+```bash
+julia -e 'using Pkg; Pkg.add("https://github.com/cduck/FastRepl.jl")'
+```
 
 ## Examples
 
@@ -43,7 +50,7 @@ end
 
 ## IJulia
 
-Some of the above macros can be automatically applied in an IJulia notebook by including the following line in the first cell:
+Some of the above macros can be automatically applied in an [IJulia](https://github.com/JuliaLang/IJulia.jl) notebook by including the following line in the first cell:
 ```julia
 using FastRepl; register_auto()
 ```
@@ -54,14 +61,16 @@ using FastRepl; register_auto()
 using FastRepl; register_auto()
 # Other imports
 @repl using MyPackage  # Quikly reimport package
-
+```
+```julia
 ### Cell 2 ###
-@@repl reset  # Resets all functions defined in the cell
+@@repl reset  # Reset all functions defined in the cell
 
 # The @repl or @reset macros are automatically added
 function my_function(x) x end
 function my_function(x, arg2) arg2 end
-
+```
+```julia
 ### Cell 3 ###
 # In most cases, no code change is needed.
 # IJulia automatically applies the macro.

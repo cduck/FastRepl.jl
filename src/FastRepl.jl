@@ -22,10 +22,12 @@ include("macros.jl")
 
 
 struct NoLongerDefined end
-no_longer_defined = NoLongerDefined()
-show(io, ::MIME"text/plain", v::FastRepl.NoLongerDefined) = show(io, v)
-function show(io, ::FastRepl.NoLongerDefined)
-    print(io, "no_longer_defined")
+const no_longer_defined = NoLongerDefined()
+function Base.show(io::IO, ::MIME"text/plain", v::NoLongerDefined)
+    Base.show(io, v)
+end
+function Base.show(io::IO, ::NoLongerDefined)
+    print(io, "<no longer defined>")
 end
 
 function _fast_deinit_()

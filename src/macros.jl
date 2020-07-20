@@ -65,7 +65,7 @@ Define the decorated function or struct from a fresh state.
 """
 macro reset(expr)
     if expr isa Symbol
-        esc(_macro_reset_symbol(expr))
+        esc(_macro_reset_symbol(expr, __module__))
     elseif is_function_expr(expr)
         esc(_macro_reset_function(expr, __module__))
     elseif expr === nothing
@@ -137,7 +137,7 @@ function _do_temporary_function(expr_box, mod, nofail, reset)
     expr = expr_box.contents
     sym = function_symbol(expr)
     out_expr = make_top_level!(quote end)
-    counters = actual_getproperty(mod, :䷀function_counters, Dict{Symbol, Int}())
+    counters = actual_getproperty(mod, :䷀function_counters, Dict{Any, Int}())
     i = get!(counters, sym, 0)
     if reset || i < 1
         i = counters[sym] += 1
@@ -174,14 +174,18 @@ end
 """
 Helper for `@reset function_name`.
 """
-function _macro_reset_symbol(sym::Symbol)
+function _macro_reset_symbol(sym::Symbol, mod::Module)
     sym_box = Core.Box(sym)
     quote
-        ($setindex!)(䷀function_counters,
-                     ($get)(䷀function_counters, $sym_box.contents, 0)
-                     + ($sym !== $no_longer_defined),
-                     $sym_box.contents)
-        $sym = $no_longer_defined
+        if isdefined($mod, $sym_box.contents)
+            isdefined($mod, :䷀function_counters) || (
+                ䷀function_counters = Dict{Any, Int}())
+            ($setindex!)(䷀function_counters,
+                         ($get)(䷀function_counters, $sym_box.contents, 0)
+                         + ($sym !== $no_longer_defined),
+                         $sym_box.contents)
+            $sym = $no_longer_defined
+        end
         nothing
     end
 end
@@ -240,7 +244,7 @@ function _do_temporary_struct(expr_box, mod)
     expr = expr_box.contents
     sym = struct_name(expr)
     out_expr = make_top_level!(quote end)
-    counters = actual_getproperty(mod, :䷀function_counters, Dict{Symbol, Int}())
+    counters = actual_getproperty(mod, :䷀function_counters, Dict{Any, Int}())
     i = counters[sym] = get!(counters, sym, 0) + 1
     push!(out_expr.args, :(䷀function_counters = $counters))
     tmp_sym = _temp_function_symbol(sym, i)

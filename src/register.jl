@@ -1,5 +1,3 @@
-_has_registered = false
-
 function _test_ijulia(quiet)
     if !isdefined(Main, :IJulia)
         quiet || println("Error: Auto macros are only supported in IJulia.")
@@ -13,19 +11,22 @@ function _test_ijulia(quiet)
     true
 end
 
-function register_auto(; quiet=false)
+function register_auto(; reset_flag=false, quiet=false)
     _test_ijulia(quiet) || return
-    global _has_registered
-    _has_registered && return
-    push!(Main.IJulia.cell_macros, var"@repl")
-    _has_registered = true
+    unregister_auto(quiet=quiet)
+    mac = reset_flag ? var"@repl_reset" : var"repl"
+    push!(Main.IJulia.cell_macros, mac)
     nothing
 end
 
 function unregister_auto(; quiet=false)
     _test_ijulia(quiet) || return
-    _has_registered || return
-    i = findlast(f -> f == var"@repl", Main.IJulia.cell_macros)
-    i === nothing && return
-    splice!(Main.IJulia.cell_macros, i)
+    remove_last_item!(Main.IJulia.cell_macros, var"@repl")
+    remove_last_item!(Main.IJulia.cell_macros, var"@repl_reset")
+end
+
+function remove_last_item!(list, item)
+    i = findlast(f -> f == item, list)
+    i === nothing || splice!(list, i)
+    list
 end

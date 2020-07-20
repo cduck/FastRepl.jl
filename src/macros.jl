@@ -35,6 +35,9 @@ end
 macro repl(flag::Symbol, expr)
     esc(_macro_repl(expr, __module__, [flag]))
 end
+macro repl_reset(expr)
+    esc(_macro_repl(expr, __module__, [:reset]))
+end
 function _macro_repl(expr, mod, flags=Symbol[])
     if is_function_expr(expr)
         _macro_repl_function(expr, mod)

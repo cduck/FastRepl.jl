@@ -212,7 +212,7 @@ function _macro_repl_block(expr::Expr, flags=Symbol::[])
     end
     if expr isa Expr && expr.head in (:block, :toplevel)
         # A block of statements
-        was_defined::Set{Symbol} = Set()
+        was_defined = Set()
         for i in axes(expr.args, 1)
             sub_expr = expr.args[i]
             if isexpr(sub_expr, :struct)

@@ -11,6 +11,8 @@ _FastRepl.FastRepl.@repl using FastRepl; register_auto()
 """
 module FastRepl
 
+import Base.show
+
 export @repl, @reset, register_auto, unregister_auto
 
 
@@ -20,6 +22,10 @@ include("macros.jl")
 
 struct NoLongerDefined end
 no_longer_defined = NoLongerDefined()
+show(io::IO, ::MIME"text/plain", v::FastRepl.NoLongerDefined) = show(io, v)
+function show(io::IO, ::MIME"text/plain", ::FastRepl.NoLongerDefined)
+    print(io, "no_longer_defined")
+end
 
 # For debugging
 macro dump(expr)

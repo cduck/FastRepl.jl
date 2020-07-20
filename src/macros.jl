@@ -262,7 +262,12 @@ function _macro_repl_block(expr::Expr, mod::Module, flags=Symbol::[])
         for i in axes(expr.args, 1)
             sub_expr = expr.args[i]
             if isexpr(sub_expr, :struct)
-                sym = sub_expr.args[2]
+                sym = struct_name(sub_expr)
+                if sym in was_defined
+                    println(
+                        "Warning: Function definition for $(sym) overwritten "
+                        * "by a later struct definition.")
+                end
                 expr.args[i] = _macro_repl_struct(sub_expr, mod)
                 push!(was_defined, sym)
             elseif is_function_expr(sub_expr)

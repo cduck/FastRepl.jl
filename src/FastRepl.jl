@@ -6,6 +6,7 @@ See the documentation for ``@repl``.
 # FastRepl Development
 Use it on itself:
 ```julia
+Base._require(Base.identify_package(Main, "FastRepl"))
 module _FastRepl using FastRepl end
 _FastRepl.FastRepl.@repl using FastRepl; register_auto()
 ```

@@ -1,7 +1,24 @@
 using Base.Meta: isexpr
 
-module _Empty end
-_default_names = Set(names(_Empty, all=true))
+
+function actual_hasproperty(x, s::Symbol)
+    try
+        getproperty(x, s)
+        return true
+    catch e
+        e isa UndefVarError || rethrow()
+        return false
+    end
+end
+
+_std_modules = Dict(:Core=>Core, :Base=>Base, :Main=>Main)
+module _䷀Empty end
+_default_names = Set(names(_䷀Empty, all=true))
+for std_mod in values(_std_modules)
+    union!(_default_names,
+           Set(sym for sym in names(std_mod, all=true, imported=true)
+                   if actual_hasproperty(_䷀Empty, sym)))
+end
 
 
 """
@@ -17,9 +34,10 @@ _default_names = Set(names(_Empty, all=true))
 
 Make the decorated function or struct redefinable in a REPL.
 
-- Import/using: Decorate a statement with `@repl` to import a fresh version of
-    the package under development every time.  `_fast_deinit_` will be called on
-    the top module before a re-import if it exists.
+- Import/using: Reload a package.  Decorate the first import for a package with
+    `@reset` and later imports with `@repl`.  `_fast_deinit_` will be called on
+    the top module before a re-import if it exists.  Do not use when importing
+    functions to add methods.
 - Function: Decorate the first method with `@reset` and the rest with `@repl`.
 - Struct: Decorate the definition with `@repl`.
 - Block: Apply the `@repl` macro to the top-level of an entire block of code in
@@ -49,7 +67,7 @@ function _macro_repl(expr, mod, flags=Symbol[])
     elseif expr isa Expr && expr.head in (:block, :toplevel)
         _macro_repl_block(expr, mod, flags)
     elseif is_import_expr(expr)
-        _macro_repl_import(expr, mod)
+        _macro_repl_import(expr, mod; reset=false)
     elseif expr === nothing
         nothing
     else
@@ -63,6 +81,8 @@ end
 
 Define the decorated function or struct from a fresh state.
 
+- Import/using: Reload a package.  Decorate the first import for a package with
+    `@reset` and later imports with `@repl`.
 - Symbol: Clear a previously defined function or struct.
 - Function: Clear all previously defined methods.
 """
@@ -71,6 +91,8 @@ macro reset(expr)
         esc(_macro_reset_symbol(expr, __module__))
     elseif is_function_expr(expr)
         esc(_macro_reset_function(expr, __module__))
+    elseif is_import_expr(expr)
+        _macro_repl_import(expr, __module__; reset=true)
     elseif expr === nothing
         nothing
     else
@@ -122,6 +144,29 @@ function function_with_symbol(expr::Expr, sym)
     end
 end
 
+function _get_temp_symbol(mod::Module, sym, increment::Bool=false)
+    if isdefined(mod, :䷀symbol_map)
+        map = getproperty(mod, :䷀symbol_map)
+    else
+        map = Base.eval(mod, :(䷀symbol_map = Dict{Any, Any}()))
+    end
+    if isdefined(mod, :䷀symbol_counters)
+        counters = getproperty(mod, :䷀symbol_counters)
+    else
+        counters = Base.eval(mod, :(䷀symbol_counters = Dict{Any, Int}()))
+    end
+
+    if increment || !haskey(map, sym)
+        i = get!(counters, sym, 0)
+        if increment || i == 0
+            i = counters[sym] += 1
+        end
+        map[sym] = _temp_function_symbol(sym, i)
+    else
+        map[sym]
+    end
+end
+
 """
 Helper for `@repl function ...`.
 """
@@ -140,13 +185,12 @@ function _do_temporary_function(expr_box, mod, nofail, reset)
     expr = expr_box.contents
     sym = function_symbol(expr)
     out_expr = make_top_level!(quote end)
-    counters = actual_getproperty(mod, :䷀function_counters, Dict{Any, Int}())
-    i = get!(counters, sym, 0)
-    if reset || i < 1
-        i = counters[sym] += 1
+    tmp_sym = _get_temp_symbol(mod, sym, reset)
+    def_sym = tmp_sym
+    if isexpr(expr, :macro)
+        sym = Symbol("@" * string(sym))
+        def_sym = Symbol("@" * string(def_sym))
     end
-    push!(out_expr.args, :(䷀function_counters = $counters))
-    tmp_sym = _temp_function_symbol(sym, i)
     new_expr = function_with_symbol(expr, tmp_sym)
 
     fallback = true
@@ -162,7 +206,7 @@ function _do_temporary_function(expr_box, mod, nofail, reset)
         push!(out_expr.args, expr)
     else
         push!(out_expr.args, new_expr)
-        push!(out_expr.args, :($sym = $tmp_sym))
+        push!(out_expr.args, :($sym = $def_sym))
     end
     Base.eval(mod, out_expr)  # Returns the defined function
 end
@@ -181,12 +225,8 @@ function _macro_reset_symbol(sym::Symbol, mod::Module)
     sym_box = Core.Box(sym)
     quote
         if isdefined($mod, $sym_box.contents)
-            isdefined($mod, :䷀function_counters) || (
-                ䷀function_counters = Dict{Any, Int}())
-            ($setindex!)(䷀function_counters,
-                         ($get)(䷀function_counters, $sym_box.contents, 0)
-                         + ($sym !== $no_longer_defined),
-                         $sym_box.contents)
+            ($_get_temp_symbol)($mod, $sym_box.contents,
+                                $sym !== $no_longer_defined)
             $sym = $no_longer_defined
         end
         nothing
@@ -247,10 +287,7 @@ function _do_temporary_struct(expr_box, mod)
     expr = expr_box.contents
     sym = struct_name(expr)
     out_expr = make_top_level!(quote end)
-    counters = actual_getproperty(mod, :䷀function_counters, Dict{Any, Int}())
-    i = counters[sym] = get!(counters, sym, 0) + 1
-    push!(out_expr.args, :(䷀function_counters = $counters))
-    tmp_sym = _temp_function_symbol(sym, i)
+    tmp_sym = _get_temp_symbol(mod, sym, true)
     new_expr = expr_with_vals_replaced(expr, sym, tmp_sym)
 
     fallback = true
@@ -289,8 +326,8 @@ function _macro_repl_block(expr::Expr, mod::Module, flags=Symbol::[])
                 sym = struct_name(sub_expr)
                 if sym in was_defined
                     println(
-                        "Warning: Function definition for $(sym) overwritten "
-                        * "by a later struct definition.")
+                        "Warning: Definition for $(sym) overwritten by a later "
+                        * "struct definition.")
                 end
                 expr.args[i] = _macro_repl_struct(sub_expr, mod)
                 push!(was_defined, sym)
@@ -341,33 +378,24 @@ function _with_first_root_expr(expr, new_root_expr)
     end
 end
 
-function import_expr_package_sym(expr::Expr)
+function import_expr_package_syms(expr::Expr)
     @assert is_import_expr(expr)
     root_expr = _first_root_expr(expr)
+    @assert isexpr(root_expr, :(.))
     @assert length(root_expr.args) > 0
-    sym = root_expr.args[1]
-    @assert sym isa Symbol
-    sym
+    syms = root_expr.args
+    @assert all(sym isa Symbol for sym in syms)
+    syms
 end
 
-function import_expr_package_sym!(expr::Expr, new_vals...)
+function import_expr_package_syms!(expr::Expr, new_syms...)
     @assert is_import_expr(expr)
     root_expr = _first_root_expr(expr)
     @assert length(root_expr.args) > 0
     sym = root_expr.args[1]
     @assert sym isa Symbol
-    root_expr.args = [new_vals..., root_expr.args[2:end]...]
+    root_expr.args = [new_syms...]
     expr
-end
-
-function actual_hasproperty(x, s::Symbol)
-    try
-        getproperty(x, s)
-        return true
-    catch e
-        e isa UndefVarError || rethrow()
-        return false
-    end
 end
 
 function actual_getproperty(x, s::Symbol, default=nothing)
@@ -380,71 +408,147 @@ function actual_getproperty(x, s::Symbol, default=nothing)
 end
 
 function _exported_names(mod::Module, imported_mod::Module, ignore=())
-    all_names = Set(sym for sym in names(imported_mod, all=true)
+    all_names = Set(sym for sym in names(imported_mod, all=true, imported=true)
                         if actual_hasproperty(mod, sym))
     setdiff!(all_names, _default_names, ignore)
 end
 
 """
-Helper for `@repl import ...` and `@repl using ...`.
+Reload a package but don't rebind any names.
 """
-function _macro_repl_import(expr::Expr, mod::Module)
-    sym = import_expr_package_sym(expr)
-    sym == :(.) && return expr  # Don't modify relative imports
-    pkg_name = string(sym)
-    import_expr = import_expr_package_sym!(expr, :(.), :(.), :䷁, sym)
+function _reload_package(into::Module, pkg_name; force::Bool=true)
+    sym = Symbol(pkg_name)
+    haskey(_std_modules, sym) && return _std_modules[sym]
+    uuidkey = Base.identify_package(into, pkg_name)
+    if uuidkey === nothing
+        throw(ArgumentError("""
+            Package $(pkg_name) not found.
+            - Run `import Pkg; Pkg.add($(repr(pkg_name)))` to install the $pkg_name package.
+            """))
+    end
+    if force || !Base.root_module_exists(uuidkey)
+        Base._require(uuidkey)  # Force reload
+        for callback in Base.package_callbacks
+            Base.invokelatest(callback, uuidkey)
+        end
+    end
+    return Base.root_module(uuidkey)
+end
+
+"""
+Helper for `@repl import ...`, `@repl using ...`, `@reset import/using`.
+"""
+function _macro_repl_import(expr::Expr, mod::Module; reset::Bool=false,
+                            pkg_sym_out=Ref(:(!)),
+                            already_reset=Set{Symbol}())
+    @assert expr.head in (:import, :using) && length(expr.args) >= 1
+    # Handle multiple imports on one line
+    if length(expr.args) > 1
+        out_expr = quote end
+        for item in expr.args
+            pkg_sym_out = Ref(:(!))
+            out_item = _macro_repl_import(Expr(expr.head, item),
+                                          mod, reset=reset,
+                                          pkg_sym_out=pkg_sym_out,
+                                          already_reset=already_reset)
+            push!(already_reset, pkg_sym_out[])
+            push!(out_expr.args, out_item)
+        end
+        return out_expr
+    end
+
+    syms = import_expr_package_syms(expr)
+    i = 1
+    while i<length(syms) && syms[i] == :(.)
+        i += 1
+    end
+    relative = i-1
+    @assert syms[i] != :(.)
+    pkg_name = string(syms[i])
+    pkg_sym_out[] = syms[i]
+    if syms[i] in already_reset
+        reset = false
+    end
+    if relative > 0
+        expr = import_expr_package_syms!(expr, :(.), syms...)
+    end
+    path = syms[i:end-isexpr(expr, :import)]
     quote
-        $(_do_temporary_import)($pkg_name, $(Core.Box(import_expr)), $mod)
+        $(_do_temporary_import)($pkg_name, $path, $(Core.Box(expr)), $mod,
+                                $relative, $reset)
     end
 end
 
-function _do_temporary_import(pkg_name, expr_box, mod::Module)
+function _do_temporary_import(pkg_name, path, expr_box, mod::Module,
+                              relative::Int, reset::Bool)
     cleanup_dict = actual_getproperty(mod, :䷀import_variables,
                                       Dict{String, Set{Symbol}}())
     module_dict = actual_getproperty(mod, :䷀import_modules,
                                      Dict{String, Module}())
 
     # Make temporary module
-    scratch = Module(:䷀)
-    # Include and import the package in different submodules
-    Base.eval(scratch, make_top_level!(quote
-        module ䷁
-            include(Base.find_package($pkg_name))
+    # Reload and import the package
+    if relative > 0
+        in_mod = mod
+        for i in 2:relative
+            in_mod = parentmodule(in_mod)
         end
-        module ䷀S2
-            $(expr_box.contents)
+        tmp_mod_sym = _get_temp_symbol(mod, Symbol("Mod䷀"*pkg_name), true)
+        out_mod = Base.eval(mod, :(
+            module $tmp_mod_sym
+                $(expr_box.contents)
+            end
+        ))
+        pkg_name = "."^relative * pkg_name
+    else
+        in_mod = _reload_package(mod, pkg_name, force=reset)
+        out_mod = Module(:䷀)
+        Base.eval(out_mod, expr_box.contents)
+    end
+    sub_in_mod = in_mod
+    if length(path) >= 1
+        for s in path[1+(relative==0):end]
+            t = getproperty(sub_in_mod, s)
+            t isa Module || break
+            sub_in_mod = t
         end
-    end))
-    in_mod = getproperty(scratch.䷁, Symbol(pkg_name))
-    out_mod = scratch.䷀S2
+    end
 
-    # De-init old module
-    old_mod = get(module_dict, pkg_name, nothing)
-    module_dict[pkg_name] = in_mod
-    if old_mod !== nothing && isdefined(old_mod, :_fast_deinit_)
-        try
-            old_mod._fast_deinit_()
-        catch e
-            println(stderr, "Error during fast deinit: $(e)")
-            showerror(stderr, e)
+    if reset
+        # De-init old module
+        old_mod = get(module_dict, pkg_name, nothing)
+        module_dict[pkg_name] = in_mod
+        if old_mod !== nothing && isdefined(old_mod, :_fast_deinit_)
+            try
+                old_mod._fast_deinit_()
+            catch e
+                println(stderr, "Error during fast deinit: $(e)")
+                showerror(stderr, e)
+            end
         end
     end
 
     # Assign the correct variables to the imported names
     expr = quote end
     @assert isexpr(expr, :block)
-    all_names = _exported_names(out_mod, in_mod, [:䷀S2])
-    # Clear old values
-    for sym in get(cleanup_dict, pkg_name, Set{Symbol}())
-        sym == :䷀S2 && continue  # Skip temporary module name
-        assignment = :($sym = $no_longer_defined)
-        push!(expr.args, assignment)
+    all_names = _exported_names(out_mod, sub_in_mod, [:䷀S2])
+    if reset
+        # Clear old values
+        for sym in get(cleanup_dict, pkg_name, Set{Symbol}())
+            sym == :䷀S2 && continue  # Skip temporary module name
+            assignment = :($sym = $no_longer_defined)
+            push!(expr.args, assignment)
+        end
     end
-    # Save names for later cleanup
-    cleanup_dict[pkg_name] = all_names
     # Set new values
     for sym in all_names
         push!(expr.args, :($sym = $out_mod.$sym))
+    end
+    # Save names for later cleanup
+    if reset || !haskey(cleanup_dict, pkg_name)
+        cleanup_dict[pkg_name] = all_names
+    else
+        union!(cleanup_dict[pkg_name], all_names)
     end
     push!(expr.args, :(䷀import_variables = $cleanup_dict))
     push!(expr.args, :(䷀import_modules = $module_dict))

@@ -28,6 +28,9 @@ Make the decorated function or struct redefinable in a REPL.
 Flags:
 - reset: Applies `@reset` to the first method of each function in the block (if
     not a constructor function).
+
+Broken:
+- Docstrings on decorated definitions don't work currently.
 """
 macro repl(expr)
     esc(_macro_repl(expr, __module__))

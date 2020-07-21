@@ -24,6 +24,8 @@ end
 """
     @repl import ...
     @repl using ...
+    @repl include("MyFile.jl")
+    @repl include("MyFile.jl") using .MyFile
     @repl [flag] function ... end
     @repl struct ... end
     @repl [flag] begin ... end
@@ -38,6 +40,8 @@ Make the decorated function or struct redefinable in a REPL.
     `@reset` and later imports with `@repl`.  `_fast_deinit_` will be called on
     the top module before a re-import if it exists.  Do not use when importing
     functions to add methods.
+- Include: Run the content of a file.  Any import statements involving any
+    modules defined in that file must be included in the same macro call.
 - Function: Decorate the first method with `@reset` and the rest with `@repl`.
 - Struct: Decorate the definition with `@repl`.
 - Block: Apply the `@repl` macro to the top-level of an entire block of code in
@@ -56,6 +60,14 @@ end
 macro repl(flag::Symbol, expr)
     esc(_macro_repl(expr, __module__, [flag]))
 end
+macro repl(expr::Expr, expr2, exprs...)
+    if is_include_expr(expr)
+        _macro_repl_include(__module__, expr, expr2, exprs...)
+    else
+        println("Error: Unsupported arguments to @repl.  $([expr, exprs...])")
+        expr
+    end
+end
 macro repl_reset(expr)
     esc(_macro_repl(expr, __module__, [:reset]))
 end
@@ -68,6 +80,8 @@ function _macro_repl(expr, mod, flags=Symbol[])
         _macro_repl_block(expr, mod, flags)
     elseif is_import_expr(expr)
         _macro_repl_import(expr, mod; reset=false)
+    elseif is_include_expr(expr)
+        _macro_repl_include(mod, expr)
     elseif expr === nothing
         nothing
     else
@@ -413,6 +427,32 @@ function _exported_names(mod::Module, imported_mod::Module, ignore=())
     setdiff!(all_names, _default_names, ignore)
 end
 
+function actual_all_names(mod, include_default=false, include_hidden=false)
+    visible_names = names(mod, all=true, imported=true)
+    all_names = Set{Symbol}()
+    for sym in visible_names
+        name = string(sym)
+        if !include_hidden
+            name[1] in "#䷀" && continue  # Skip hidden names
+        end
+        push!(all_names, sym)
+        val = getproperty(mod, sym)
+        if val isa Module
+            for sub_sym in names(val, all=true, imported=true)
+                if !include_hidden
+                    string(sub_sym)[1] in "#䷀" && continue  # Skip hidden names
+                end
+                actual_hasproperty(mod, sub_sym) || continue
+                push!(all_names, sub_sym)
+            end
+        end
+    end
+    if !include_default
+        setdiff!(all_names, _default_names)
+    end
+    all_names
+end
+
 """
 Reload a package but don't rebind any names.
 """
@@ -531,11 +571,11 @@ function _do_temporary_import(pkg_name, path, expr_box, mod::Module,
     # Assign the correct variables to the imported names
     expr = quote end
     @assert isexpr(expr, :block)
-    all_names = _exported_names(out_mod, sub_in_mod, [:䷀S2])
+    all_names = _exported_names(out_mod, sub_in_mod,
+                                [:䷀, Symbol("Mod䷀"*pkg_name)])
     if reset
         # Clear old values
         for sym in get(cleanup_dict, pkg_name, Set{Symbol}())
-            sym == :䷀S2 && continue  # Skip temporary module name
             assignment = :($sym = $no_longer_defined)
             push!(expr.args, assignment)
         end
@@ -552,6 +592,42 @@ function _do_temporary_import(pkg_name, path, expr_box, mod::Module,
     end
     push!(expr.args, :(䷀import_variables = $cleanup_dict))
     push!(expr.args, :(䷀import_modules = $module_dict))
+    Base.eval(mod, expr)
+    nothing
+end
+
+
+function is_include_expr(expr)
+    isexpr(expr, :call) && length(expr.args) == 2 && expr.args[1] == :include
+end
+
+"""
+Helper for `@repl include(...)` and `@repl include(...) ...`.
+"""
+function _macro_repl_include(mod::Module, exprs...)
+    @assert is_include_expr(exprs[1])
+    quote
+        $(_do_temporary_include)($exprs, $mod)
+    end
+end
+
+function _do_temporary_include(exprs, mod::Module)
+    # Make temporary module
+    out_mod = Module(:䷀, true)
+    Base.eval(out_mod,
+              :(include(path::AbstractString) = Base.include($out_mod, path)))
+    for expr in exprs
+        Base.eval(out_mod, expr)
+    end
+
+    # Assign the correct variables to the imported names
+    expr = quote end
+    @assert isexpr(expr, :block)
+    all_names = setdiff!(actual_all_names(out_mod, false), [:䷀])
+    # Set new values
+    for sym in all_names
+        push!(expr.args, :($sym = $out_mod.$sym))
+    end
     Base.eval(mod, expr)
     nothing
 end

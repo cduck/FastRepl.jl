@@ -13,9 +13,14 @@ julia -e 'using Pkg; Pkg.add("https://github.com/cduck/FastRepl.jl")'
 
 #### Quickly reload a package (useful while developing a package)
 ```julia
-# Running this line again will reload the package
+# Running this cell again will reload the package
 # This can be any (single) valid import or using statement
-@repl using MyPackage
+@reset using MyPackage
+@repl import MyPackage: x, y
+@repl import MyPackage.z
+
+# When developing a standalone file not in a package:
+@repl include("MyFile.jl") using .MyFile
 ```
 
 #### Clear old methods from a function
@@ -60,7 +65,8 @@ using FastRepl; register_auto()
 ### Cell 1 ###
 using FastRepl; register_auto()
 # Other imports
-@repl using MyPackage  # Quikly reimport package
+@repl using MyPackage  # Quikly reload package
+@repl include("MyFile.jl") using .MyFile  # Quikly reload file
 ```
 ```julia
 ### Cell 2 ###

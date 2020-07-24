@@ -120,7 +120,7 @@ function is_function_expr(expr)
     isexpr(expr, :macro) && return true
     if isexpr(expr, :(=))
         sub_expr = expr.args[1]
-        while isexpr(sub_expr, :where)
+        while isexpr(sub_expr, :where) || isexpr(sub_expr, :(::))
             sub_expr = sub_expr.args[1]
         end
         isexpr(sub_expr, :call) && return true
@@ -134,7 +134,7 @@ function function_symbol(expr::Expr)
         expr.args[1]
     else
         sub_expr = expr.args[1]
-        while isexpr(sub_expr, :where)
+        while isexpr(sub_expr, :where) || isexpr(sub_expr, :(::))
             sub_expr = sub_expr.args[1]
         end
         @assert isexpr(sub_expr, :call)
@@ -149,7 +149,7 @@ function function_with_symbol(expr::Expr, sym)
     else
         decl = copy(expr.args[1])
         sub_expr = decl
-        while isexpr(sub_expr, :where)
+        while isexpr(sub_expr, :where) || isexpr(sub_expr, :(::))
             sub_expr = sub_expr.args[1] = copy(sub_expr.args[1])
         end
         @assert isexpr(sub_expr, :call)

@@ -120,7 +120,7 @@ function is_function_expr(expr)
     isexpr(expr, :macro) && return true
     if isexpr(expr, :(=))
         sub_expr = expr.args[1]
-        while isexpr(sub_expr, :where) || isexpr(sub_expr, :(::))
+        while sub_expr isa Expr && sub_expr.head in (:where, :(::), :curly)
             sub_expr = sub_expr.args[1]
         end
         isexpr(sub_expr, :call) && return true
@@ -134,11 +134,11 @@ function function_symbol(expr::Expr)
         expr.args[1]
     else
         sub_expr = expr.args[1]
-        while isexpr(sub_expr, :where) || isexpr(sub_expr, :(::))
+        while (sub_expr isa Expr
+                && sub_expr.head in (:where, :(::), :curly, :call))
             sub_expr = sub_expr.args[1]
         end
-        @assert isexpr(sub_expr, :call)
-        sub_expr.args[1]
+        sub_expr::Symbol
     end
 end
 
@@ -149,10 +149,12 @@ function function_with_symbol(expr::Expr, sym)
     else
         decl = copy(expr.args[1])
         sub_expr = decl
-        while isexpr(sub_expr, :where) || isexpr(sub_expr, :(::))
+        while (sub_expr isa Expr
+                && sub_expr.head in (:where, :(::), :curly, :call)
+                && sub_expr.args[1] isa Expr)
             sub_expr = sub_expr.args[1] = copy(sub_expr.args[1])
         end
-        @assert isexpr(sub_expr, :call)
+        @assert sub_expr.args[1] isa Symbol
         sub_expr.args[1] = sym
         Expr(expr.head, decl, expr.args[2:end]...)
     end
@@ -272,9 +274,12 @@ function struct_with_name(expr::Expr, sym::Symbol)
         Expr(expr.head, expr.args[1], sym, expr.args[3:end]...)
     else
         root_expr = _first_root_expr(expr.args[2])
-        _with_first_root_expr(
-            expr.args[2],
-            Expr(root_expr.head, sym, root_expr.args[2:end]...))
+        Expr(expr.head,
+             expr.args[1],
+             _with_first_root_expr(
+                expr.args[2],
+                Expr(root_expr.head, sym, root_expr.args[2:end]...)),
+             expr.args[3:end]...)
     end
 end
 

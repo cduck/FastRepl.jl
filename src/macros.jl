@@ -138,7 +138,7 @@ function function_symbol(expr::Expr)
                 && sub_expr.head in (:where, :(::), :curly, :call))
             sub_expr = sub_expr.args[1]
         end
-        sub_expr::Symbol
+        sub_expr
     end
 end
 
@@ -154,7 +154,6 @@ function function_with_symbol(expr::Expr, sym)
                 && sub_expr.args[1] isa Expr)
             sub_expr = sub_expr.args[1] = copy(sub_expr.args[1])
         end
-        @assert sub_expr.args[1] isa Symbol
         sub_expr.args[1] = sym
         Expr(expr.head, decl, expr.args[2:end]...)
     end
@@ -329,7 +328,8 @@ end
 """
 Helper for `@repl begin ...` and `@@repl ...`.
 """
-function _macro_repl_block(expr::Expr, mod::Module, flags=Symbol::[])
+function _macro_repl_block(expr::Expr, mod::Module, flags=Symbol::[],
+                           was_defined=Set())
     reset_flag = :reset in flags
     known_flags = [:reset]
     if !all(f in known_flags for f in flags)
@@ -338,7 +338,6 @@ function _macro_repl_block(expr::Expr, mod::Module, flags=Symbol::[])
     end
     if expr isa Expr && expr.head in (:block, :toplevel)
         # A block of statements
-        was_defined = Set()
         for i in axes(expr.args, 1)
             sub_expr = expr.args[i]
             if isexpr(sub_expr, :struct)
@@ -360,6 +359,9 @@ function _macro_repl_block(expr::Expr, mod::Module, flags=Symbol::[])
                                                         nofail=true)
                 end
                 push!(was_defined, sym)
+            elseif sub_expr isa Expr && expr.head in (:block, :toplevel)
+                expr.args[i] = _macro_repl_block(sub_expr, mod, flags,
+                                                 was_defined)
             end
         end
         expr
